@@ -26,7 +26,11 @@ RUN mkdir -p /app/store_creds \
     && chown -R app:app /app/store_creds \
     && chmod 755 /app/store_creds
 
-USER app
+# NOTA UTOPICA (req R.01, 2026-08-15): NO bajamos a USER app aqui.
+# Railway monta volumenes nuevos con dueno root; el arranque necesita
+# ser root una vez para hacer chown del volumen (WORKSPACE_MCP_CREDENTIALS_DIR)
+# antes de dejar caer privilegios al usuario app para el proceso real.
+# Ver docker-entrypoint-utopica.sh.
 
 # Expose port (use default of 8000 if PORT not set)
 EXPOSE 8000
@@ -42,6 +46,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 ENV TOOL_TIER=""
 ENV TOOLS=""
 
+COPY docker-entrypoint-utopica.sh /docker-entrypoint-utopica.sh
+RUN chmod +x /docker-entrypoint-utopica.sh
+
 # Use entrypoint for the base command and CMD for args
-ENTRYPOINT ["/bin/sh", "-c"]
+ENTRYPOINT ["/docker-entrypoint-utopica.sh"]
 CMD ["uv run main.py --transport streamable-http ${TOOL_TIER:+--tool-tier \"$TOOL_TIER\"} ${TOOLS:+--tools $TOOLS}"]
