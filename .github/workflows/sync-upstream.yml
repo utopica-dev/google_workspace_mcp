@@ -9,7 +9,14 @@ name: Sincroniza con upstream (taylorwilsdon/google_workspace_mcp)
 # aviso solo cuando hace falta una decision humana. Si el merge automatico
 # choca en algo que no sea uv.lock (el unico archivo que cambia en casi cada
 # commit de upstream y que se resuelve regenerandolo, nunca a mano), se aborta
-# y se abre un PR para revision -- nunca se fuerza un merge roto a produccion.
+# y se abre un PR para revision.
+#
+# Aviso: por CORREO, no por chat. El job termina en rojo (exit 1) tanto si
+# hay un choque real que necesita revision como si algo mas truena -- eso es
+# lo que hace que GitHub mande su notificacion nativa por correo a quien creo
+# este workflow (o quien ultimo edito el cron), sin secretos ni SMTP propio.
+# Requiere UNA vez: github.com/settings/notifications -> seccion "Actions" ->
+# email activado para "Failed workflows only" (o "all").
 
 on:
   schedule:
@@ -92,7 +99,7 @@ jobs:
         if: steps.check.outputs.al_dia == 'false' && (steps.merge.outputs.merge_exit == '0' || steps.resolver.outputs.resuelto == 'true')
         run: git push origin main
 
-      - name: Abrir rama + PR cuando hay choque real
+      - name: Abrir rama + PR cuando hay choque real, y marcar el job en rojo
         if: steps.check.outputs.al_dia == 'false' && steps.merge.outputs.merge_exit != '0' && steps.resolver.outputs.resuelto != 'true'
         run: |
           git fetch upstream main
@@ -102,21 +109,7 @@ jobs:
             --title "Sync upstream choca con el parche de Railway (revisar a mano)" \
             --body "El merge automatico de upstream/main choco en Dockerfile o docker-entrypoint-utopica.sh (no solo en uv.lock). Reaplica el parche de Railway a mano antes de mergear." \
             --base main --head "$rama"
+          echo "::error::sync-upstream necesita revision humana -- se abrio un PR. Marcando el job en rojo para que llegue la notificacion por correo."
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Avisar por Telegram si hizo falta revision
-        if: steps.check.outputs.al_dia == 'false' && steps.merge.outputs.merge_exit != '0' && steps.resolver.outputs.resuelto != 'true'
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.PIXEL_TG_TOKEN }}/sendMessage" \
-            -d "chat_id=${{ secrets.PIXEL_TG_CHAT }}" \
-            -d "parse_mode=HTML" \
-            --data-urlencode "text=🟠 <b>google_workspace_mcp</b>: sync con upstream chocó con el parche de Railway. Se abrió un PR en utopica-dev/google_workspace_mcp para revisar a mano." > /dev/null
-
-      - name: Avisar por Telegram ante cualquier otra falla del job
-        if: failure()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.PIXEL_TG_TOKEN }}/sendMessage" \
-            -d "chat_id=${{ secrets.PIXEL_TG_CHAT }}" \
-            -d "parse_mode=HTML" \
-            --data-urlencode "text=🔴 <b>google_workspace_mcp</b>: la sincronizacion semanal con upstream fallo por algo distinto a un choque de merge (revisa el log). https://github.com/utopica-dev/google_workspace_mcp/actions/runs/${{ github.run_id }}" > /dev/null
