@@ -1,0 +1,114 @@
+name: Sincroniza con upstream (taylorwilsdon/google_workspace_mcp)
+
+# Mantiene este fork al dia con el proyecto original sin perder el parche local
+# de despliegue en Railway (Dockerfile + docker-entrypoint-utopica.sh). Railway
+# ya esta conectado a este repo/rama, asi que un push limpio a main dispara el
+# redeploy solo -- no hace falta nada mas para que el servidor se actualice.
+#
+# Filosofia (igual que el resto de la fabrica): silencio si todo sale bien,
+# aviso solo cuando hace falta una decision humana. Si el merge automatico
+# choca en algo que no sea uv.lock (el unico archivo que cambia en casi cada
+# commit de upstream y que se resuelve regenerandolo, nunca a mano), se aborta
+# y se abre un PR para revision -- nunca se fuerza un merge roto a produccion.
+
+on:
+  schedule:
+    - cron: "0 15 * * 1" # lunes 09:00 America/Mexico_City (15:00 UTC)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configurar git
+        run: |
+          git config user.name "sync-upstream-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Agregar remoto upstream
+        run: |
+          git remote add upstream https://github.com/taylorwilsdon/google_workspace_mcp.git
+          git fetch upstream main
+
+      - name: Nada nuevo que traer
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "al_dia=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "al_dia=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Instalar uv
+        if: steps.check.outputs.al_dia == "false"
+        uses: astral-sh/setup-uv@v3
+
+      - name: Intentar merge
+        if: steps.check.outputs.al_dia == "false"
+        id: merge
+        run: |
+          set +e
+          git merge upstream/main --no-edit -m "merge: sincroniza con upstream (automatico)"
+          echo "merge_exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Si el unico choque es uv.lock, regenerarlo
+        if: steps.check.outputs.al_dia == "false" && steps.merge.outputs.merge_exit != "0"
+        id: resolver
+        run: |
+          set -e
+          conflictos=$(git diff --name-only --diff-filter=U)
+          echo "archivos en conflicto: $conflictos"
+          otros=$(echo "$conflictos" | grep -v "^uv\.lock$" || true)
+          if [ -z "$otros" ] && echo "$conflictos" | grep -q "^uv\.lock$"; then
+            echo "solo uv.lock choco -- regenerando"
+            rm -f uv.lock
+            uv lock
+            git add uv.lock
+            git commit --no-edit
+            echo "resuelto=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "choque real fuera de uv.lock -- se necesita revision humana"
+            git merge --abort
+            echo "resuelto=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Confirmar que el parche de Railway sigue intacto
+        if: steps.check.outputs.al_dia == "false" && (steps.merge.outputs.merge_exit == "0" || steps.resolver.outputs.resuelto == "true")
+        run: |
+          test -f docker-entrypoint-utopica.sh || (echo "FALTA docker-entrypoint-utopica.sh -- abortando push" && exit 1)
+          grep -q "WORKSPACE_MCP_CREDENTIALS_DIR" Dockerfile || (echo "Dockerfile perdio el parche del volumen -- abortando push" && exit 1)
+
+      - name: Push a main (dispara el redeploy en Railway)
+        if: steps.check.outputs.al_dia == "false" && (steps.merge.outputs.merge_exit == "0" || steps.resolver.outputs.resuelto == "true")
+        run: git push origin main
+
+      - name: Abrir rama + PR cuando hay choque real
+        if: steps.check.outputs.al_dia == "false" && steps.merge.outputs.merge_exit != "0" && steps.resolver.outputs.resuelto != "true"
+        run: |
+          git fetch upstream main
+          rama="sync-upstream-$(date +%Y%m%d)"
+          git checkout -b "$rama" upstream/main
+          gh pr create \
+            --title "Sync upstream choca con el parche de Railway (revisar a mano)" \
+            --body "El merge automatico de upstream/main choco en Dockerfile o docker-entrypoint-utopica.sh (no solo en uv.lock). Reaplica el parche de Railway a mano antes de mergear." \
+            --base main --head "$rama"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Avisar por Telegram si hizo falta revision
+        if: steps.check.outputs.al_dia == "false" && steps.merge.outputs.merge_exit != "0" && steps.resolver.outputs.resuelto != "true"
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.PIXEL_TG_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.PIXEL_TG_CHAT }}" \
+            -d "parse_mode=HTML" \
+            --data-urlencode "text=🟠 <b>google_workspace_mcp</b>: sync con upstream chocó con el parche de Railway. Se abrió un PR en utopica-dev/google_workspace_mcp para revisar a mano." > /dev/null
