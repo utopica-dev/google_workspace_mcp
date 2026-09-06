@@ -112,3 +112,11 @@ jobs:
             -d "chat_id=${{ secrets.PIXEL_TG_CHAT }}" \
             -d "parse_mode=HTML" \
             --data-urlencode "text=🟠 <b>google_workspace_mcp</b>: sync con upstream chocó con el parche de Railway. Se abrió un PR en utopica-dev/google_workspace_mcp para revisar a mano." > /dev/null
+
+      - name: Avisar por Telegram ante cualquier otra falla del job
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.PIXEL_TG_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.PIXEL_TG_CHAT }}" \
+            -d "parse_mode=HTML" \
+            --data-urlencode "text=🔴 <b>google_workspace_mcp</b>: la sincronizacion semanal con upstream fallo por algo distinto a un choque de merge (revisa el log). https://github.com/utopica-dev/google_workspace_mcp/actions/runs/${{ github.run_id }}" > /dev/null
