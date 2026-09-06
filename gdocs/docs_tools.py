@@ -14,12 +14,17 @@ from typing import List, Any, Literal, Optional, Union
 from typing_extensions import TypedDict
 
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload
 
 from mcp.types import ToolAnnotations
 
 # Auth & server utilities
 from auth.service_decorator import require_google_service, require_multiple_services
+from core.file_limits import (
+    FileTooLargeError,
+    download_media_bytes,
+    ensure_within_file_size_limit,
+)
 from core.utils import (
     GOOGLE_API_WRITE_RETRIES,
     extract_office_xml_text,
@@ -98,7 +103,8 @@ async def search_docs(
     Returns:
         str: A formatted list of Google Docs matching the search query.
     """
-    logger.info(f"[search_docs] Email={user_google_email}, Query='{query}'")
+    logger.info(f"[search_docs] Email={user_google_email}, query_len={len(query)}")
+    logger.debug(f"[search_docs] Query='{query}'")
 
     escaped_query = query.replace("'", "\\'")
 
@@ -180,7 +186,7 @@ async def get_doc_content(
         drive_service.files()
         .get(
             fileId=document_id,
-            fields="id, name, mimeType, webViewLink",
+            fields="id, name, mimeType, webViewLink, size",
             supportsAllDrives=True,
         )
         .execute
@@ -289,6 +295,18 @@ async def get_doc_content(
         }
         effective_export_mime = export_mime_type_map.get(mime_type)
 
+        # Declared Drive size applies to binary downloads (not GSuite exports).
+        if not effective_export_mime:
+            try:
+                ensure_within_file_size_limit(
+                    file_metadata.get("size"),
+                    file_name=file_name,
+                    file_id=document_id,
+                    web_view_link=web_view_link,
+                )
+            except FileTooLargeError as e:
+                return str(e)
+
         request_obj = (
             drive_service.files().export_media(
                 fileId=document_id,
@@ -301,14 +319,15 @@ async def get_doc_content(
             )
         )
 
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request_obj)
-        loop = asyncio.get_event_loop()
-        done = False
-        while not done:
-            status, done = await loop.run_in_executor(None, downloader.next_chunk)
-
-        file_content_bytes = fh.getvalue()
+        try:
+            file_content_bytes = await download_media_bytes(
+                request_obj,
+                file_name=file_name,
+                file_id=document_id,
+                web_view_link=web_view_link,
+            )
+        except FileTooLargeError as e:
+            return str(e)
 
         office_text = extract_office_xml_text(file_content_bytes, mime_type)
         if office_text:
@@ -411,7 +430,9 @@ async def create_doc(
     Returns:
         str: Confirmation message with document ID, link, and initial document state.
     """
-    logger.info(f"[create_doc] Invoked. Email: '{user_google_email}', Title='{title}'")
+    logger.info(
+        f"[create_doc] Invoked. Email: '{user_google_email}', title_len={len(title)}"
+    )
 
     doc = await asyncio.to_thread(
         service.documents().create(body={"title": title}).execute
@@ -436,7 +457,7 @@ async def create_doc(
         f"Link: {link}"
     )
     logger.info(
-        f"Successfully created Google Doc '{title}' (ID: {doc_id}) for {user_google_email}. Link: {link}"
+        f"Successfully created Google Doc (ID: {doc_id}) for {user_google_email}. Link: {link}"
     )
     return msg
 
@@ -768,8 +789,9 @@ async def find_and_replace_doc(
         str: Confirmation message with replacement count
     """
     logger.info(
-        f"[find_and_replace_doc] Doc={document_id}, find='{find_text}', replace='{replace_text}', tab='{tab_id}'"
+        f"[find_and_replace_doc] Doc={document_id}, find_len={len(find_text)}, replace_len={len(replace_text)}, tab='{tab_id}'"
     )
+    logger.debug(f"[find_and_replace_doc] find='{find_text}', replace='{replace_text}'")
 
     requests = [
         create_find_replace_request(find_text, replace_text, match_case, tab_id)
@@ -1995,7 +2017,7 @@ async def export_doc_to_pdf(
     if mime_type != "application/vnd.google-apps.document":
         return f"Error: File '{original_name}' is not a Google Doc (MIME type: {mime_type}). Only native Google Docs can be exported to PDF."
 
-    logger.info(f"[export_doc_to_pdf] Exporting '{original_name}' to PDF")
+    logger.info(f"[export_doc_to_pdf] Exporting doc {document_id} to PDF")
 
     # Export the document as PDF
     try:
@@ -2003,15 +2025,18 @@ async def export_doc_to_pdf(
             fileId=document_id, mimeType="application/pdf"
         )
 
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request_obj)
+        try:
+            pdf_content = await download_media_bytes(
+                request_obj,
+                file_name=original_name,
+                file_id=document_id,
+                web_view_link=web_view_link,
+            )
+        except FileTooLargeError as e:
+            return str(e)
 
-        done = False
-        while not done:
-            _, done = await asyncio.to_thread(downloader.next_chunk)
-
-        pdf_content = fh.getvalue()
         pdf_size = len(pdf_content)
+        fh = io.BytesIO(pdf_content)
 
     except Exception as e:
         return f"Error: Failed to export document to PDF: {str(e)}"
@@ -2024,8 +2049,6 @@ async def export_doc_to_pdf(
 
     # Upload PDF to Drive
     try:
-        # Reuse the existing BytesIO object by resetting to the beginning
-        fh.seek(0)
         # Create media upload object
         media = MediaIoBaseUpload(fh, mimetype="application/pdf", resumable=True)
 
