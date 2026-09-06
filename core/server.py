@@ -755,6 +755,16 @@ def configure_server_for_http():
                 cimd_manager = getattr(provider, "_cimd_manager", None)
                 if cimd_manager is not None:
                     cimd_manager.default_scope = cimd_default_scope
+                # Utopica (2026-09-06): Claude no manda `scope` en /authorize, y
+                # OAuthProxy.authorize cae a `self.required_scopes` cuando falta
+                # (`effective_scopes = params.scopes or self.required_scopes or []`).
+                # Con PROTOCOL_AUTH_SCOPES ahi, el token de Google nacia con solo
+                # openid + userinfo.email y TODA tool real fallaba por scopes,
+                # aunque el consentimiento en Google estuviera completo.
+                # Subimos el fallback del proxy al set completo SIN tocar el token
+                # verifier, que sigue exigiendo solo los scopes de protocolo: asi,
+                # si Google no concede alguno, se cae esa tool y no la sesion.
+                provider.required_scopes = list(provider_valid_scopes)
                 # Enable protocol-level auth
                 server.auth = provider
                 logger.info(
