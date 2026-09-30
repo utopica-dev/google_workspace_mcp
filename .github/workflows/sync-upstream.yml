@@ -1,7 +1,14 @@
 name: Sincroniza con upstream (taylorwilsdon/google_workspace_mcp)
 
 # Mantiene este fork al dia con el proyecto original sin perder el parche local
-# de despliegue en Railway (Dockerfile + docker-entrypoint-utopica.sh). Railway
+# de despliegue en Railway (Dockerfile + docker-entrypoint-utopica.sh) ni los
+# parches locales de codigo. Parches locales vigentes (el merge los conserva;
+# el paso "Confirmar" de abajo aborta el push si alguno desaparece):
+#   1. Railway: Dockerfile con WORKSPACE_MCP_CREDENTIALS_DIR + docker-entrypoint-utopica.sh
+#   2. fix(oauth21): set completo de scopes cuando el cliente no manda scope (commit 9134f70)
+#   3. get_events detallado muestra "Created:" y "Updated:" (gcalendar/calendar_helpers.py);
+#      lo usa el tablero de juego para contar la junta el dia en que se agendo.
+# Railway
 # ya esta conectado a este repo/rama, asi que un push limpio a main dispara el
 # redeploy solo -- no hace falta nada mas para que el servidor se actualice.
 #
@@ -94,6 +101,7 @@ jobs:
         run: |
           test -f docker-entrypoint-utopica.sh || (echo "FALTA docker-entrypoint-utopica.sh -- abortando push" && exit 1)
           grep -q "WORKSPACE_MCP_CREDENTIALS_DIR" Dockerfile || (echo "Dockerfile perdio el parche del volumen -- abortando push" && exit 1)
+          grep -q 'Created: {item.get(' gcalendar/calendar_helpers.py || (echo "calendar_helpers.py perdio el parche Created/Updated -- abortando push" && exit 1)
 
       - name: Push a main (dispara el redeploy en Railway)
         if: steps.check.outputs.al_dia == 'false' && (steps.merge.outputs.merge_exit == '0' || steps.resolver.outputs.resuelto == 'true')
@@ -106,8 +114,8 @@ jobs:
           rama="sync-upstream-$(date +%Y%m%d)"
           git checkout -b "$rama" upstream/main
           gh pr create \
-            --title "Sync upstream choca con el parche de Railway (revisar a mano)" \
-            --body "El merge automatico de upstream/main choco en Dockerfile o docker-entrypoint-utopica.sh (no solo en uv.lock). Reaplica el parche de Railway a mano antes de mergear." \
+            --title "Sync upstream choca con un parche local (revisar a mano)" \
+            --body "El merge automatico de upstream/main choco fuera de uv.lock, en un archivo con parche local (ver la lista al inicio de .github/workflows/sync-upstream.yml). Reaplica el parche a mano antes de mergear." \
             --base main --head "$rama"
           echo "::error::sync-upstream necesita revision humana -- se abrio un PR. Marcando el job en rojo para que llegue la notificacion por correo."
           exit 1

@@ -319,6 +319,15 @@ def _format_event_detail_lines(
         f"{prefix}Color ID: {item.get('colorId', 'None')}",
     ]
 
+    # Parche local de Utopica (no viene de upstream): fecha de creacion y de
+    # ultima modificacion del evento. El tablero de juego cuenta una junta el
+    # dia en que se agendo (= creacion del evento), no el dia en que ocurre.
+    # El sync-upstream verifica que esta linea siga aqui antes de publicar.
+    if item.get("created"):
+        lines.append(f"{prefix}Created: {item.get('created')}")
+    if item.get("updated"):
+        lines.append(f"{prefix}Updated: {item.get('updated')}")
+
     recurring_event_id = item.get("recurringEventId")
     if recurring_event_id:
         lines.append(f"{prefix}Recurring Event ID: {recurring_event_id}")
