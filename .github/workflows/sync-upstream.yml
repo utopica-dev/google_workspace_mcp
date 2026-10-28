@@ -82,18 +82,38 @@ jobs:
           set -e
           conflictos=$(git diff --name-only --diff-filter=U)
           echo "archivos en conflicto: $conflictos"
-          otros=$(echo "$conflictos" | grep -v "^uv\.lock$" || true)
-          if [ -z "$otros" ] && echo "$conflictos" | grep -q "^uv\.lock$"; then
-            echo "solo uv.lock choco -- regenerando"
-            rm -f uv.lock
-            uv lock
-            git add uv.lock
+          otros=$(echo "$conflictos" | grep -v "^uv\.lock$" | grep -v "^\.github/workflows/" || true)
+          if [ -z "$otros" ] && [ -n "$conflictos" ]; then
+            echo "solo choco uv.lock y/o workflows -- resolviendo"
+            if echo "$conflictos" | grep -q "^uv\.lock$"; then
+              rm -f uv.lock
+              uv lock
+              git add uv.lock
+            fi
+            # Los workflows se restauran enseguida al estado del fork (paso siguiente).
+            for f in $(echo "$conflictos" | grep "^\.github/workflows/" || true); do
+              git checkout --ours -- "$f" 2>/dev/null || git rm -f -- "$f"
+              git add -A -- "$f"
+            done
             git commit --no-edit
             echo "resuelto=true" >> "$GITHUB_OUTPUT"
           else
             echo "choque real fuera de uv.lock -- se necesita revision humana"
             git merge --abort
             echo "resuelto=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Conservar los workflows del fork (el token de Actions no puede subir workflows)
+        if: steps.check.outputs.al_dia == 'false' && (steps.merge.outputs.merge_exit == '0' || steps.resolver.outputs.resuelto == 'true')
+        run: |
+          # GitHub rechaza el push de un GITHUB_TOKEN que crea o modifica .github/workflows/*
+          # (fallo del 26-oct-2026: upstream agrego helm-publish.yml). Los workflows de este fork
+          # son propios (sync-upstream, docker-publish...), asi que el merge se queda con los
+          # del padre 1 (main antes del merge) y descarta los de upstream.
+          git rm -rq --ignore-unmatch -r .github/workflows
+          git checkout HEAD^1 -- .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
           fi
 
       - name: Confirmar que el parche de Railway sigue intacto
