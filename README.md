@@ -18,7 +18,7 @@
 
 By leveraging native OAuth 2.1, stateless deployment capability and external auth server & gateway passthrough auth support, it's also the only Workspace MCP you can host for your whole organization centrally & securely! Supports all free Google accounts & Google Workspace plans with expanded app options like Chat & Spaces.
 
-<a href="https://workspacemcp.com/workspace-mcp-cloud?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=hero-cloud"><img width="600" height="80" alt="workspace-cloud" src="https://github.com/user-attachments/assets/349a6bab-c83a-4254-be2e-4ac6a9e8b3e5" /></a>
+<a href="https://workspacemcp.com/workspace-mcp-cloud?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=hero-cloud"><img width="400" height="53" alt="workspace-cloud" src="https://github.com/user-attachments/assets/349a6bab-c83a-4254-be2e-4ac6a9e8b3e5" /></a>
 
 </div>
 
@@ -108,7 +108,7 @@ This project is [MIT licensed](LICENSE) —
 </td>
 <td align="center" width="25%">
 <h3>📅</h3><a href="https://workspacemcp.com/google-calendar?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=services-google-calendar"><b>Calendar</b></a><br>
-<sub>7 tools - events, free/busy,<br>Out of Office, Focus Time</sub>
+<sub>7 tools - events, sharing, free/busy,<br>Out of Office, Focus Time</sub>
 </td>
 <td align="center" width="25%">
 <h3>📝</h3><a href="https://workspacemcp.com/google-docs?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=services-google-docs"><b>Docs</b></a><br>
@@ -211,6 +211,8 @@ uvx workspace-mcp --transport streamable-http --tool-tier core
 </table>
 
 **Tool tiers** keep context windows lean: `core` is the essential set, `extended` adds management operations, `complete` loads everything. Combine with `--tools <service> ...`, `--read-only`, or per-service `--permissions`, and subtract individual tools with `--disabled-tools <name> ...` - details in the [server modes docs](https://workspacemcp.com/docs?utm_source=github.com&utm_medium=referral&utm_campaign=readme&utm_content=tiers-server-modes#server-modes).
+
+**Per-request toolsets** let HTTP clients sharing one server see different tools, using the same headers as the GitHub MCP server. `X-MCP-Toolsets` takes comma-separated service names (the `--tools` names, e.g. `gmail,drive`) and `X-MCP-Tools` takes comma-separated tool names (e.g. `search_gmail_messages`); when both are sent the request gets the union. Names ignore case and whitespace, unknown names match nothing, and a blank or missing header leaves the tool list unchanged. Headers only narrow what the server already loaded: a tool removed by the tier, `--tools`, `--read-only`, `--permissions` or `--disabled-tools` stays unavailable, and calls to tools outside the request's selection fail as unknown tools.
 
 ## Connect Your Client
 
